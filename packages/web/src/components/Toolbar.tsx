@@ -69,11 +69,16 @@ export function Toolbar() {
         </button>
 
         <button
-          title="Text"
-          className="w-7 h-7 flex items-center justify-center rounded text-gray-400 hover:text-gray-100 hover:bg-gray-700 transition-colors"
+          title="Text (T)"
+          onClick={() => setActiveTool(activeTool === 'text' ? 'select' : 'text')}
+          className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${
+            activeTool === 'text'
+              ? 'bg-indigo-600 text-white'
+              : 'text-gray-400 hover:text-gray-100 hover:bg-gray-700'
+          }`}
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h8m-8 6h16" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7V5h16v2M9 5v14m6-14v14M7 19h10" />
           </svg>
         </button>
       </div>

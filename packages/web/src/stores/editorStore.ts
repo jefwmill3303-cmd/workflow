@@ -31,21 +31,43 @@ export interface CanvasObjectDescriptor {
   scaleY: number;
 }
 
+// ── Text types ────────────────────────────────────────────────────────────────
+
+export type TextAnimation = 'none' | 'fade-in' | 'slide-up' | 'pop' | 'typewriter';
+
+export interface TextObject {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  fontSize: number;
+  fontFamily: string;
+  fontWeight: 'normal' | 'bold';
+  fontStyle: 'normal' | 'italic';
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+  textAlign: 'left' | 'center' | 'right';
+  backgroundColor: string;
+  backgroundOpacity: number;
+  shadow: boolean;
+  shadowColor: string;
+  shadowOffsetX: number;
+  shadowOffsetY: number;
+  shadowBlur: number;
+  animation: TextAnimation;
+}
+
 // ── Timeline types ────────────────────────────────────────────────────────────
 
 export interface TimelineClip {
   id: string;
   mediaFileId: string;
   trackId: string;
-  /** Position on the timeline (seconds) */
   startTime: number;
-  /** Total duration of the source media (seconds) */
   duration: number;
-  /** Trim in-point: where in the source the clip starts (seconds) */
   inPoint: number;
-  /** Trim out-point: where in the source the clip ends (seconds) */
   outPoint: number;
-  /** Display label */
   label: string;
 }
 
@@ -68,15 +90,15 @@ interface EditorState {
   project: Project | null;
   loadedMedia: MediaFile[];
   canvasObjects: CanvasObjectDescriptor[];
+  textObjects: Record<string, TextObject>;
   playback: PlaybackState;
   selectedObjectId: string | null;
-  /** Set by MediaLibrary click; consumed & cleared by VideoCanvas */
   mediaToLoad: MediaFile | null;
 
   // Timeline
   timelineTracks: TimelineTrack[];
-  timelineZoom: number; // pixels per second
-  activeTool: 'select' | 'split';
+  timelineZoom: number;
+  activeTool: 'select' | 'split' | 'text';
   activeClipId: string | null;
 
   // ── Actions ──
@@ -87,6 +109,10 @@ interface EditorState {
   removeCanvasObject: (id: string) => void;
   updateCanvasObject: (id: string, updates: Partial<CanvasObjectDescriptor>) => void;
   clearCanvasObjects: () => void;
+
+  addTextObject: (obj: TextObject) => void;
+  updateTextObject: (id: string, updates: Partial<TextObject>) => void;
+  removeTextObject: (id: string) => void;
 
   setPlaying: (v: boolean) => void;
   setCurrentTime: (t: number) => void;
@@ -101,7 +127,7 @@ interface EditorState {
   removeClip: (trackId: string, clipId: string) => void;
   splitClip: (trackId: string, clipId: string, atTime: number) => void;
   setTimelineZoom: (zoom: number) => void;
-  setActiveTool: (tool: 'select' | 'split') => void;
+  setActiveTool: (tool: 'select' | 'split' | 'text') => void;
   setActiveClipId: (id: string | null) => void;
 }
 
@@ -111,6 +137,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   project: null,
   loadedMedia: [],
   canvasObjects: [],
+  textObjects: {},
   playback: { playing: false, currentTime: 0, duration: 0 },
   selectedObjectId: null,
   mediaToLoad: null,
@@ -131,6 +158,68 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })),
   clearCanvasObjects: () => set({ canvasObjects: [] }),
 
+  // ── Text objects ─────────────────────────────────────────────────────────
+
+  addTextObject: (obj) => {
+    set((prev) => {
+      const existingTrack = prev.timelineTracks.find((t) => t.type === 'text');
+      const trackId = existingTrack?.id ?? crypto.randomUUID();
+
+      const existingClips = existingTrack?.clips ?? [];
+      const startTime = prev.playback.currentTime;
+      const dur = 5;
+
+      const clipId = crypto.randomUUID();
+      const clip: TimelineClip = {
+        id: clipId,
+        mediaFileId: obj.id,
+        trackId,
+        startTime,
+        duration: dur,
+        inPoint: 0,
+        outPoint: dur,
+        label: obj.text.slice(0, 20) || 'Text',
+      };
+
+      const newTrackCount = prev.timelineTracks.filter((t) => t.type === 'text').length;
+
+      return {
+        textObjects: { ...prev.textObjects, [obj.id]: obj },
+        timelineTracks: existingTrack
+          ? prev.timelineTracks.map((t) =>
+              t.id === trackId ? { ...t, clips: [...t.clips, clip] } : t,
+            )
+          : [
+              ...prev.timelineTracks,
+              {
+                id: trackId,
+                type: 'text' as const,
+                label: `Text ${newTrackCount + 1}`,
+                clips: [clip],
+              },
+            ],
+        playback: {
+          ...prev.playback,
+          duration: Math.max(prev.playback.duration, startTime + dur),
+        },
+      };
+    });
+  },
+
+  updateTextObject: (id, updates) =>
+    set((prev) => ({
+      textObjects: {
+        ...prev.textObjects,
+        [id]: { ...prev.textObjects[id], ...updates } as TextObject,
+      },
+    })),
+
+  removeTextObject: (id) =>
+    set((prev) => {
+      const { [id]: _removed, ...rest } = prev.textObjects;
+      return { textObjects: rest };
+    }),
+
   setPlaying: (v) => set((s) => ({ playback: { ...s.playback, playing: v } })),
   setCurrentTime: (t) => set((s) => ({ playback: { ...s.playback, currentTime: t } })),
   setDuration: (d) => set((s) => ({ playback: { ...s.playback, duration: d } })),
@@ -142,13 +231,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   addMediaToTimeline: (file, sourceDuration) => {
     const s = get();
-    const trackType: TimelineTrack['type'] =
-      file.type === 'AUDIO' ? 'audio' : 'video';
+    const trackType: TimelineTrack['type'] = file.type === 'AUDIO' ? 'audio' : 'video';
 
     const existingTrack = s.timelineTracks.find((t) => t.type === trackType);
     const trackId = existingTrack?.id ?? crypto.randomUUID();
 
-    // Place clip after the last clip in this track
     const existingClips = existingTrack?.clips ?? [];
     const startTime = existingClips.reduce(
       (max, c) => Math.max(max, c.startTime + (c.outPoint - c.inPoint)),
@@ -167,11 +254,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       label: file.filename,
     };
 
-    const newTotalDuration = Math.max(
-      s.playback.duration,
-      startTime + sourceDuration,
-    );
-
     set((prev) => ({
       timelineTracks: existingTrack
         ? prev.timelineTracks.map((t) =>
@@ -182,14 +264,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             {
               id: trackId,
               type: trackType,
-              label: trackType === 'video'
-                ? `Video ${prev.timelineTracks.filter((t) => t.type === 'video').length + 1}`
-                : `Audio ${prev.timelineTracks.filter((t) => t.type === 'audio').length + 1}`,
+              label:
+                trackType === 'video'
+                  ? `Video ${prev.timelineTracks.filter((t) => t.type === 'video').length + 1}`
+                  : `Audio ${prev.timelineTracks.filter((t) => t.type === 'audio').length + 1}`,
               clips: [clip],
             },
           ],
       activeClipId: clipId,
-      playback: { ...prev.playback, duration: newTotalDuration },
+      playback: {
+        ...prev.playback,
+        duration: Math.max(prev.playback.duration, startTime + sourceDuration),
+      },
     }));
   },
 
@@ -225,7 +311,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (atTime <= clip.startTime || atTime >= clipEnd) return;
 
     const splitSourceTime = clip.inPoint + (atTime - clip.startTime);
-
     const clipA: TimelineClip = { ...clip, outPoint: splitSourceTime };
     const clipB: TimelineClip = {
       ...clip,
