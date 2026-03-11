@@ -2,7 +2,9 @@ import { Link } from 'react-router-dom';
 import { useEditorStore } from '../stores/editorStore.js';
 
 export function Toolbar() {
-  const project = useEditorStore((s) => s.project);
+  const project    = useEditorStore((s) => s.project);
+  const activeTool = useEditorStore((s) => s.activeTool);
+  const setActiveTool = useEditorStore((s) => s.setActiveTool);
 
   return (
     <div className="h-12 bg-gray-800 border-b border-gray-700 flex items-center px-4 gap-3 flex-shrink-0">
@@ -31,23 +33,49 @@ export function Toolbar() {
 
       <div className="flex-1" />
 
-      {/* Tool group */}
+      {/* Canvas tool group */}
       <div className="flex items-center gap-1 bg-gray-900 rounded-md p-1">
-        {[
-          { label: 'Select', icon: 'M3 3l7 7m0 0l7 7M10 10l7-7M10 10L3 17' },
-          { label: 'Text', icon: 'M4 6h16M4 12h8m-8 6h16' },
-          { label: 'Shape', icon: 'M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z' },
-        ].map(({ label, icon }) => (
-          <button
-            key={label}
-            title={label}
-            className="w-7 h-7 flex items-center justify-center rounded text-gray-400 hover:text-gray-100 hover:bg-gray-700 transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={icon} />
-            </svg>
-          </button>
-        ))}
+        <button
+          title="Select (V)"
+          onClick={() => setActiveTool('select')}
+          className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${
+            activeTool === 'select'
+              ? 'bg-indigo-600 text-white'
+              : 'text-gray-400 hover:text-gray-100 hover:bg-gray-700'
+          }`}
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 3l7 7m0 0l7 7M10 10l7-7M10 10L3 17" />
+          </svg>
+        </button>
+
+        {/* Split tool */}
+        <button
+          title="Split clip at playhead (S)"
+          onClick={() => setActiveTool(activeTool === 'split' ? 'select' : 'split')}
+          className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${
+            activeTool === 'split'
+              ? 'bg-orange-600 text-white'
+              : 'text-gray-400 hover:text-gray-100 hover:bg-gray-700'
+          }`}
+        >
+          {/* Scissors icon */}
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <circle cx="6" cy="6" r="2.5" strokeWidth={1.5} />
+            <circle cx="6" cy="18" r="2.5" strokeWidth={1.5} />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M8.12 8.12L20 20M8.12 15.88L20 4" />
+          </svg>
+        </button>
+
+        <button
+          title="Text"
+          className="w-7 h-7 flex items-center justify-center rounded text-gray-400 hover:text-gray-100 hover:bg-gray-700 transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h8m-8 6h16" />
+          </svg>
+        </button>
       </div>
 
       <div className="flex-1" />

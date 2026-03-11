@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Canvas as FabricCanvas, FabricImage } from 'fabric';
-import { useEditorStore } from '../stores/editorStore.js';
+import { useEditorStore, type TimelineClip } from '../stores/editorStore.js';
 
 const LOGICAL_W = 1080;
 const LOGICAL_H = 1920;
+const IMAGE_DEFAULT_DURATION = 5; // seconds on timeline for still images
 
-type VideoEntry = { videoEl: HTMLVideoElement; fabricImg: FabricImage };
+// ── Media entry types ─────────────────────────────────────────────────────────
+type VideoEntry = { kind: 'video'; videoEl: HTMLVideoElement; fabricImg: FabricImage };
+type ImageEntry = { kind: 'image'; fabricImg: FabricImage };
+type MediaEntry = VideoEntry | ImageEntry;
 
 function formatTime(t: number): string {
   const m = Math.floor(t / 60);
@@ -13,22 +17,60 @@ function formatTime(t: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function VideoCanvas() {
-  const canvasElRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const fabricRef = useRef<FabricCanvas | null>(null);
-  const videoMapRef = useRef<Map<string, VideoEntry>>(new Map());
-  const rafRef = useRef<number>(0);
-  const activeMediaIdRef = useRef<string | null>(null);
+// ── Helper: find the clip that is "active" for timeline-clock playback ────────
+function findActiveClip(): TimelineClip | undefined {
+  const { timelineTracks, activeClipId } = useEditorStore.getState();
+  for (const track of timelineTracks) {
+    const clip = track.clips.find((c) => c.id === activeClipId);
+    if (clip) return clip;
+  }
+  return undefined;
+}
 
-  const mediaToLoad = useEditorStore((s) => s.mediaToLoad);
-  const playback = useEditorStore((s) => s.playback);
-  const clearMediaToLoad = useEditorStore((s) => s.clearMediaToLoad);
-  const addCanvasObject = useEditorStore((s) => s.addCanvasObject);
+export function VideoCanvas() {
+  const canvasElRef   = useRef<HTMLCanvasElement>(null);
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const fabricRef     = useRef<FabricCanvas | null>(null);
+  const mediaMapRef   = useRef<Map<string, MediaEntry>>(new Map());
+  const rafRef        = useRef<number>(0);
+
+  const mediaToLoad       = useEditorStore((s) => s.mediaToLoad);
+  const playing           = useEditorStore((s) => s.playback.playing);
+  const currentTime       = useEditorStore((s) => s.playback.currentTime);
+  const clearMediaToLoad  = useEditorStore((s) => s.clearMediaToLoad);
+  const addCanvasObject   = useEditorStore((s) => s.addCanvasObject);
   const setSelectedObjectId = useEditorStore((s) => s.setSelectedObjectId);
-  const setPlaying = useEditorStore((s) => s.setPlaying);
-  const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
-  const setDuration = useEditorStore((s) => s.setDuration);
+  const setPlaying        = useEditorStore((s) => s.setPlaying);
+  const setCurrentTime    = useEditorStore((s) => s.setCurrentTime);
+  const setDuration       = useEditorStore((s) => s.setDuration);
+  const addMediaToTimeline = useEditorStore((s) => s.addMediaToTimeline);
+
+  // ── Update canvas object visibility based on clip timing ─────────────────
+  const updateVisibility = useCallback((time: number) => {
+    const { timelineTracks } = useEditorStore.getState();
+    const fc = fabricRef.current;
+    if (!fc) return;
+
+    if (timelineTracks.length === 0) return; // no clips yet — keep everything visible
+
+    // Build set of currently visible media IDs
+    const visibleIds = new Set<string>();
+    for (const track of timelineTracks) {
+      for (const clip of track.clips) {
+        const end = clip.startTime + (clip.outPoint - clip.inPoint);
+        if (time >= clip.startTime && time < end) {
+          visibleIds.add(clip.mediaFileId);
+        }
+      }
+    }
+
+    for (const [id, entry] of mediaMapRef.current) {
+      const should = visibleIds.has(id);
+      if (entry.fabricImg.visible !== should) {
+        entry.fabricImg.visible = should;
+      }
+    }
+  }, []);
 
   // ── Init Fabric canvas ────────────────────────────────────────────────────
   useEffect(() => {
@@ -47,8 +89,8 @@ export function VideoCanvas() {
     fabricRef.current = fc;
 
     fc.on('selection:created', (e) => {
-      const obj = e.selected?.[0];
-      const id = (obj as { data?: { objectId?: string } } | undefined)?.data?.objectId;
+      const id = (e.selected?.[0] as { data?: { objectId?: string } } | undefined)
+        ?.data?.objectId;
       if (id) setSelectedObjectId(id);
     });
     fc.on('selection:cleared', () => setSelectedObjectId(null));
@@ -65,11 +107,13 @@ export function VideoCanvas() {
     return () => {
       ro.disconnect();
       cancelAnimationFrame(rafRef.current);
-      videoMapRef.current.forEach(({ videoEl }) => {
-        videoEl.pause();
-        videoEl.src = '';
+      mediaMapRef.current.forEach((entry) => {
+        if (entry.kind === 'video') {
+          entry.videoEl.pause();
+          entry.videoEl.src = '';
+        }
       });
-      videoMapRef.current.clear();
+      mediaMapRef.current.clear();
       void fc.dispose();
       fabricRef.current = null;
     };
@@ -83,11 +127,12 @@ export function VideoCanvas() {
     clearMediaToLoad();
 
     if (file.type === 'VIDEO') {
-      const existing = videoMapRef.current.get(file.id);
+      const existing = mediaMapRef.current.get(file.id) as VideoEntry | undefined;
       if (existing) {
-        // Already loaded — just make it the active video
-        activeMediaIdRef.current = file.id;
-        setDuration(existing.videoEl.duration);
+        // Already loaded — make active
+        useEditorStore.getState().setActiveClipId(
+          useEditorStore.getState().activeClipId, // keep existing or find it
+        );
         fc.setActiveObject(existing.fabricImg);
         fc.requestRenderAll();
         return;
@@ -113,8 +158,7 @@ export function VideoCanvas() {
             top: LOGICAL_H / 2,
           });
           const scaleX = LOGICAL_W / (videoWidth || LOGICAL_W);
-          const scaleY = scaleX;
-          fabricImg.set({ scaleX, scaleY });
+          fabricImg.set({ scaleX, scaleY: scaleX });
           (fabricImg as FabricImage & { data: Record<string, unknown> }).data = {
             mediaId: file.id,
             objectId: file.id,
@@ -123,13 +167,12 @@ export function VideoCanvas() {
           fc.add(fabricImg);
           fc.requestRenderAll();
 
-          const entry: VideoEntry = { videoEl, fabricImg };
-          videoMapRef.current.set(file.id, entry);
-          activeMediaIdRef.current = file.id;
+          mediaMapRef.current.set(file.id, { kind: 'video', videoEl, fabricImg });
 
-          useEditorStore.getState().setDuration(duration);
-          useEditorStore.getState().setCurrentTime(0);
-          useEditorStore.getState().addCanvasObject({
+          const store = useEditorStore.getState();
+          store.setDuration(Math.max(store.playback.duration, duration));
+          store.setCurrentTime(0);
+          store.addCanvasObject({
             id: file.id,
             mediaId: file.id,
             type: 'VIDEO',
@@ -139,12 +182,12 @@ export function VideoCanvas() {
             width: videoWidth,
             height: videoHeight,
             scaleX,
-            scaleY,
+            scaleY: scaleX,
           });
+          store.addMediaToTimeline(file, duration);
 
           videoEl.addEventListener('ended', () => {
             useEditorStore.getState().setPlaying(false);
-            useEditorStore.getState().setCurrentTime(videoEl.duration);
           });
         },
         { once: true },
@@ -166,7 +209,11 @@ export function VideoCanvas() {
           };
           fc.add(img);
           fc.requestRenderAll();
-          addCanvasObject({
+
+          mediaMapRef.current.set(file.id, { kind: 'image', fabricImg: img });
+
+          const store = useEditorStore.getState();
+          store.addCanvasObject({
             id: file.id,
             mediaId: file.id,
             type: 'IMAGE',
@@ -178,52 +225,99 @@ export function VideoCanvas() {
             scaleX,
             scaleY: scaleX,
           });
+          store.addMediaToTimeline(file, IMAGE_DEFAULT_DURATION);
         })
         .catch(console.error);
     }
-  }, [mediaToLoad, clearMediaToLoad, addCanvasObject, setDuration]);
+  }, [mediaToLoad, clearMediaToLoad, addCanvasObject, addMediaToTimeline, setDuration]);
 
   // ── Play / pause ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const mediaId = activeMediaIdRef.current;
-    const entry = mediaId ? videoMapRef.current.get(mediaId) : undefined;
     const fc = fabricRef.current;
 
-    if (playback.playing) {
-      if (entry) void entry.videoEl.play();
+    if (playing) {
+      // Find active video and seek to correct timeline position
+      const clip = findActiveClip();
+      const entry = clip
+        ? (mediaMapRef.current.get(clip.mediaFileId) as VideoEntry | undefined)
+        : undefined;
+
+      if (entry?.kind === 'video') {
+        const videoTime = clip!.inPoint + (currentTime - clip!.startTime);
+        entry.videoEl.currentTime = Math.max(0, Math.min(videoTime, clip!.outPoint));
+        void entry.videoEl.play();
+      }
+
       const loop = () => {
-        if (fc) {
-          fc.requestRenderAll();
-          const t = entry?.videoEl.currentTime ?? 0;
-          useEditorStore.getState().setCurrentTime(t);
+        if (!fc) { rafRef.current = requestAnimationFrame(loop); return; }
+
+        const { activeClipId, timelineTracks, playback } = useEditorStore.getState();
+        if (!playback.playing) return;
+
+        // Find the clip driving the clock
+        let timelineTime = playback.currentTime;
+        for (const track of timelineTracks) {
+          const c = track.clips.find((cl) => cl.id === activeClipId);
+          if (c) {
+            const ve = mediaMapRef.current.get(c.mediaFileId);
+            if (ve?.kind === 'video') {
+              timelineTime = c.startTime + (ve.videoEl.currentTime - c.inPoint);
+            }
+            break;
+          }
         }
+
+        updateVisibility(timelineTime);
+        fc.requestRenderAll();
+        useEditorStore.getState().setCurrentTime(timelineTime);
         rafRef.current = requestAnimationFrame(loop);
       };
       rafRef.current = requestAnimationFrame(loop);
     } else {
-      if (entry) entry.videoEl.pause();
+      // Pause active video
+      const clip = findActiveClip();
+      const entry = clip
+        ? (mediaMapRef.current.get(clip.mediaFileId) as VideoEntry | undefined)
+        : undefined;
+      if (entry?.kind === 'video') entry.videoEl.pause();
       cancelAnimationFrame(rafRef.current);
       if (fc) fc.requestRenderAll();
     }
 
     return () => cancelAnimationFrame(rafRef.current);
-  }, [playback.playing]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, updateVisibility]);
 
-  // ── Seek ──────────────────────────────────────────────────────────────────
+  // ── Seek (when not playing — e.g. dragging timeline or seek bar) ──────────
+  useEffect(() => {
+    if (playing) return; // RAF handles playback sync
+
+    const clip = findActiveClip();
+    const entry = clip
+      ? (mediaMapRef.current.get(clip.mediaFileId) as VideoEntry | undefined)
+      : undefined;
+
+    if (entry?.kind === 'video' && clip) {
+      const videoTime = clip.inPoint + (currentTime - clip.startTime);
+      const clamped = Math.max(0, Math.min(videoTime, clip.outPoint));
+      if (Math.abs(entry.videoEl.currentTime - clamped) > 0.05) {
+        entry.videoEl.currentTime = clamped;
+      }
+    }
+
+    updateVisibility(currentTime);
+    fabricRef.current?.requestRenderAll();
+  }, [currentTime, playing, updateVisibility]);
+
+  // ── Playback controls ─────────────────────────────────────────────────────
+  const togglePlay = useCallback(() => setPlaying(!playing), [playing, setPlaying]);
+
   const handleSeek = useCallback(
-    (t: number) => {
-      const mediaId = activeMediaIdRef.current;
-      const entry = mediaId ? videoMapRef.current.get(mediaId) : undefined;
-      if (entry) entry.videoEl.currentTime = t;
-      setCurrentTime(t);
-      fabricRef.current?.requestRenderAll();
-    },
+    (t: number) => setCurrentTime(t),
     [setCurrentTime],
   );
 
-  const togglePlay = useCallback(() => {
-    setPlaying(!playback.playing);
-  }, [playback.playing, setPlaying]);
+  const duration = useEditorStore((s) => s.playback.duration);
 
   return (
     <div className="flex flex-col h-full bg-gray-950">
@@ -237,13 +331,12 @@ export function VideoCanvas() {
 
       {/* Playback controls */}
       <div className="flex-shrink-0 bg-gray-800 border-t border-gray-700 px-4 py-2 flex items-center gap-3">
-        {/* Play / Pause */}
         <button
           onClick={togglePlay}
           className="w-8 h-8 flex items-center justify-center rounded-full bg-indigo-600 hover:bg-indigo-500 text-white transition-colors flex-shrink-0"
-          aria-label={playback.playing ? 'Pause' : 'Play'}
+          aria-label={playing ? 'Pause' : 'Play'}
         >
-          {playback.playing ? (
+          {playing ? (
             <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
               <rect x="6" y="4" width="4" height="16" />
               <rect x="14" y="4" width="4" height="16" />
@@ -255,25 +348,22 @@ export function VideoCanvas() {
           )}
         </button>
 
-        {/* Current time */}
         <span className="text-xs text-gray-300 font-mono tabular-nums w-10 flex-shrink-0">
-          {formatTime(playback.currentTime)}
+          {formatTime(currentTime)}
         </span>
 
-        {/* Seek bar */}
         <input
           type="range"
           min={0}
-          max={playback.duration || 1}
+          max={duration || 1}
           step={0.01}
-          value={playback.currentTime}
+          value={currentTime}
           onChange={(e) => handleSeek(parseFloat(e.target.value))}
           className="flex-1 h-1 rounded accent-indigo-500 cursor-pointer"
         />
 
-        {/* Duration */}
         <span className="text-xs text-gray-500 font-mono tabular-nums w-10 flex-shrink-0 text-right">
-          {formatTime(playback.duration)}
+          {formatTime(duration)}
         </span>
       </div>
     </div>
