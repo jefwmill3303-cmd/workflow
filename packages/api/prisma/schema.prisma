@@ -1,0 +1,39 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum MediaType {
+  VIDEO
+  AUDIO
+  IMAGE
+}
+
+model Project {
+  id            String      @id @default(uuid())
+  name          String
+  timeline_data Json        @default("{}")
+  settings      Json        @default("{}")
+  created_at    DateTime    @default(now())
+  updated_at    DateTime    @updatedAt
+  media_files   MediaFile[]
+}
+
+model MediaFile {
+  id         String    @id @default(uuid())
+  project_id String
+  project    Project   @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  type       MediaType
+  filename   String
+  url        String
+  duration   Float?
+  metadata   Json      @default("{}")
+  created_at DateTime  @default(now())
+}
