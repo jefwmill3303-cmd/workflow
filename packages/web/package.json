@@ -12,10 +12,12 @@
   },
   "dependencies": {
     "@clipflow/shared": "*",
+    "fabric": "^6.9.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-dropzone": "^15.0.0",
-    "react-router-dom": "^7.1.1"
+    "react-router-dom": "^7.1.1",
+    "zustand": "^5.0.11"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",
