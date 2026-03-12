@@ -1,4 +1,10 @@
-import { useEditorStore, type TextObject, type TextAnimation } from '../stores/editorStore.js';
+import {
+  useEditorStore,
+  type TextObject,
+  type TextAnimation,
+  type VideoOverlay,
+  type OverlayAnimation,
+} from '../stores/editorStore.js';
 
 // ── Font list ─────────────────────────────────────────────────────────────────
 const FONT_FAMILIES = [
@@ -7,12 +13,22 @@ const FONT_FAMILIES = [
   'Bebas Neue', 'Montserrat', 'Oswald', 'Raleway', 'Roboto', 'Open Sans',
 ];
 
-const ANIMATIONS: { value: TextAnimation; label: string }[] = [
+const TEXT_ANIMATIONS: { value: TextAnimation; label: string }[] = [
   { value: 'none',       label: 'None' },
   { value: 'fade-in',    label: 'Fade In' },
   { value: 'slide-up',   label: 'Slide Up' },
   { value: 'pop',        label: 'Pop / Scale' },
   { value: 'typewriter', label: 'Typewriter' },
+];
+
+const OVERLAY_ANIMATIONS: { value: OverlayAnimation; label: string }[] = [
+  { value: 'none',         label: 'None' },
+  { value: 'fade',         label: 'Fade' },
+  { value: 'slide-left',   label: 'Slide from Left' },
+  { value: 'slide-right',  label: 'Slide from Right' },
+  { value: 'slide-top',    label: 'Slide from Top' },
+  { value: 'slide-bottom', label: 'Slide from Bottom' },
+  { value: 'scale-up',     label: 'Scale Up' },
 ];
 
 // ── Small UI primitives ───────────────────────────────────────────────────────
@@ -44,7 +60,10 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
 
 function ColorSwatch({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <label className="relative w-7 h-7 rounded cursor-pointer border border-gray-600 overflow-hidden flex-shrink-0" title={value}>
+    <label
+      className="relative w-7 h-7 rounded cursor-pointer border border-gray-600 overflow-hidden flex-shrink-0"
+      title={value}
+    >
       <span className="absolute inset-0 rounded" style={{ background: value }} />
       <input
         type="color"
@@ -92,6 +111,44 @@ function ToggleBtn({
     >
       {children}
     </button>
+  );
+}
+
+function PillSwitch({ active, onClick }: { active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`relative w-8 h-4 rounded-full transition-colors ${active ? 'bg-indigo-600' : 'bg-gray-700'}`}
+    >
+      <span
+        className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${
+          active ? 'translate-x-4' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  );
+}
+
+function SliderRow({
+  label, value, onChange, min = 0, max = 1, step = 0.01,
+}: {
+  label: string; value: number; onChange: (v: number) => void;
+  min?: number; max?: number; step?: number;
+}) {
+  return (
+    <FieldRow label={label}>
+      <div className="flex items-center gap-2 flex-1">
+        <input
+          type="range" min={min} max={max} step={step}
+          value={value}
+          onChange={(e) => onChange(parseFloat(e.target.value))}
+          className="flex-1 h-1 accent-indigo-500"
+        />
+        <span className="text-xs text-gray-400 font-mono w-8 text-right">
+          {max === 1 ? `${Math.round(value * 100)}%` : String(Math.round(value))}
+        </span>
+      </div>
+    </FieldRow>
   );
 }
 
@@ -198,14 +255,7 @@ function TextProperties({
         <SectionTitle>
           <span className="flex items-center justify-between">
             Shadow
-            <button
-              onClick={() => onUpdate({ shadow: !obj.shadow })}
-              className={`relative w-8 h-4 rounded-full transition-colors ${obj.shadow ? 'bg-indigo-600' : 'bg-gray-700'}`}
-            >
-              <span
-                className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${obj.shadow ? 'translate-x-4' : 'translate-x-0.5'}`}
-              />
-            </button>
+            <PillSwitch active={obj.shadow} onClick={() => onUpdate({ shadow: !obj.shadow })} />
           </span>
         </SectionTitle>
         {obj.shadow && (
@@ -232,26 +282,14 @@ function TextProperties({
         <FieldRow label="Color">
           <ColorSwatch value={obj.backgroundColor} onChange={(v) => onUpdate({ backgroundColor: v })} />
         </FieldRow>
-        <FieldRow label="Opacity">
-          <div className="flex items-center gap-2 flex-1">
-            <input
-              type="range" min={0} max={1} step={0.01}
-              value={obj.backgroundOpacity}
-              onChange={(e) => onUpdate({ backgroundOpacity: parseFloat(e.target.value) })}
-              className="flex-1 h-1 accent-indigo-500"
-            />
-            <span className="text-xs text-gray-400 font-mono w-8 text-right">
-              {Math.round(obj.backgroundOpacity * 100)}%
-            </span>
-          </div>
-        </FieldRow>
+        <SliderRow label="Opacity" value={obj.backgroundOpacity} onChange={(v) => onUpdate({ backgroundOpacity: v })} />
       </div>
 
       {/* Animation */}
       <div>
         <SectionTitle>Animation</SectionTitle>
         <div className="grid grid-cols-1 gap-1">
-          {ANIMATIONS.map(({ value, label }) => (
+          {TEXT_ANIMATIONS.map(({ value, label }) => (
             <button
               key={value}
               onClick={() => onUpdate({ animation: value })}
@@ -270,16 +308,205 @@ function TextProperties({
   );
 }
 
-// ── Media properties panel ────────────────────────────────────────────────────
+// ── Video overlay properties panel ────────────────────────────────────────────
+function VideoOverlayProperties({
+  mediaId,
+}: {
+  mediaId: string;
+}) {
+  const canvasObjects    = useEditorStore((s) => s.canvasObjects);
+  const overlay          = useEditorStore((s) => s.videoOverlays[mediaId]);
+  const updateOverlay    = useEditorStore((s) => s.updateVideoOverlay);
+  const obj              = canvasObjects.find((o) => o.id === mediaId);
+
+  if (!overlay || !obj) return null;
+
+  const upd = (updates: Partial<VideoOverlay>) => updateOverlay(mediaId, updates);
+  const updCK = (updates: Partial<VideoOverlay['chromaKey']>) =>
+    upd({ chromaKey: { ...overlay.chromaKey, ...updates } });
+  const updBorder = (updates: Partial<VideoOverlay['border']>) =>
+    upd({ border: { ...overlay.border, ...updates } });
+  const updCrop = (updates: Partial<VideoOverlay['crop']>) =>
+    upd({ crop: { ...overlay.crop, ...updates } });
+
+  return (
+    <div className="space-y-4">
+      {/* Type badge + filename */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-900/60 text-indigo-300">
+          VIDEO
+        </span>
+        <span className="text-xs text-gray-300 font-medium truncate" title={obj.filename}>
+          {obj.filename}
+        </span>
+      </div>
+
+      {/* Transform */}
+      <div>
+        <SectionTitle>Transform</SectionTitle>
+        <div className="bg-gray-800 rounded-md px-2 divide-y divide-gray-700/50">
+          <Row label="X"       value={Math.round(obj.x)} />
+          <Row label="Y"       value={Math.round(obj.y)} />
+          <Row label="W"       value={Math.round(obj.width  * obj.scaleX)} />
+          <Row label="H"       value={Math.round(obj.height * obj.scaleY)} />
+        </div>
+      </div>
+
+      {/* Opacity */}
+      <div>
+        <SectionTitle>Opacity</SectionTitle>
+        <SliderRow label="Opacity" value={overlay.opacity} onChange={(v) => upd({ opacity: v })} />
+      </div>
+
+      {/* Chroma Key */}
+      <div>
+        <SectionTitle>
+          <span className="flex items-center justify-between">
+            Chroma Key
+            <PillSwitch
+              active={overlay.chromaKey.enabled}
+              onClick={() => updCK({ enabled: !overlay.chromaKey.enabled })}
+            />
+          </span>
+        </SectionTitle>
+        {overlay.chromaKey.enabled && (
+          <div className="space-y-0.5">
+            <FieldRow label="Key Color">
+              <ColorSwatch
+                value={overlay.chromaKey.color}
+                onChange={(v) => updCK({ color: v })}
+              />
+            </FieldRow>
+            <SliderRow
+              label="Similarity"
+              value={overlay.chromaKey.similarity}
+              onChange={(v) => updCK({ similarity: v })}
+            />
+            <SliderRow
+              label="Smoothness"
+              value={overlay.chromaKey.smoothness}
+              onChange={(v) => updCK({ smoothness: v })}
+            />
+            <SliderRow
+              label="Spill"
+              value={overlay.chromaKey.spillSuppress}
+              onChange={(v) => updCK({ spillSuppress: v })}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Border */}
+      <div>
+        <SectionTitle>
+          <span className="flex items-center justify-between">
+            Border
+            <PillSwitch
+              active={overlay.border.enabled}
+              onClick={() => updBorder({ enabled: !overlay.border.enabled })}
+            />
+          </span>
+        </SectionTitle>
+        {overlay.border.enabled && (
+          <div className="space-y-0.5">
+            <FieldRow label="Color">
+              <ColorSwatch value={overlay.border.color} onChange={(v) => updBorder({ color: v })} />
+            </FieldRow>
+            <FieldRow label="Width">
+              <NumInput value={overlay.border.width} onChange={(v) => updBorder({ width: Math.max(0, v) })} min={0} max={40} />
+            </FieldRow>
+            <FieldRow label="Radius">
+              <NumInput value={overlay.border.radius} onChange={(v) => updBorder({ radius: Math.max(0, v) })} min={0} max={500} />
+            </FieldRow>
+          </div>
+        )}
+      </div>
+
+      {/* Drop Shadow */}
+      <div>
+        <SectionTitle>
+          <span className="flex items-center justify-between">
+            Drop Shadow
+            <PillSwitch
+              active={overlay.dropShadow}
+              onClick={() => upd({ dropShadow: !overlay.dropShadow })}
+            />
+          </span>
+        </SectionTitle>
+      </div>
+
+      {/* Crop */}
+      <div>
+        <SectionTitle>Crop (px)</SectionTitle>
+        <div className="space-y-0.5">
+          <FieldRow label="Top">
+            <NumInput value={overlay.crop.top}    onChange={(v) => updCrop({ top:    Math.max(0, v) })} min={0} max={2000} />
+          </FieldRow>
+          <FieldRow label="Bottom">
+            <NumInput value={overlay.crop.bottom} onChange={(v) => updCrop({ bottom: Math.max(0, v) })} min={0} max={2000} />
+          </FieldRow>
+          <FieldRow label="Left">
+            <NumInput value={overlay.crop.left}   onChange={(v) => updCrop({ left:   Math.max(0, v) })} min={0} max={2000} />
+          </FieldRow>
+          <FieldRow label="Right">
+            <NumInput value={overlay.crop.right}  onChange={(v) => updCrop({ right:  Math.max(0, v) })} min={0} max={2000} />
+          </FieldRow>
+        </div>
+      </div>
+
+      {/* Entry animation */}
+      <div>
+        <SectionTitle>Entry Animation</SectionTitle>
+        <div className="grid grid-cols-1 gap-1">
+          {OVERLAY_ANIMATIONS.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => upd({ entryAnimation: value })}
+              className={`text-left text-xs px-2.5 py-1.5 rounded border transition-colors ${
+                overlay.entryAnimation === value
+                  ? 'bg-indigo-700 border-indigo-500 text-indigo-100'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Exit animation */}
+      <div>
+        <SectionTitle>Exit Animation</SectionTitle>
+        <div className="grid grid-cols-1 gap-1">
+          {OVERLAY_ANIMATIONS.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => upd({ exitAnimation: value })}
+              className={`text-left text-xs px-2.5 py-1.5 rounded border transition-colors ${
+                overlay.exitAnimation === value
+                  ? 'bg-emerald-700 border-emerald-500 text-emerald-100'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Non-video media properties (audio / image) ────────────────────────────────
 function MediaProperties({ obj }: { obj: ReturnType<typeof useEditorStore.getState>['canvasObjects'][number] }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <span
           className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-            obj.type === 'VIDEO'
-              ? 'bg-indigo-900/60 text-indigo-300'
-              : 'bg-yellow-900/60 text-yellow-300'
+            obj.type === 'IMAGE'
+              ? 'bg-yellow-900/60 text-yellow-300'
+              : 'bg-emerald-900/60 text-emerald-300'
           }`}
         >
           {obj.type}
@@ -300,14 +527,6 @@ function MediaProperties({ obj }: { obj: ReturnType<typeof useEditorStore.getSta
           <Row label="Scale Y" value={obj.scaleY.toFixed(3)} />
         </div>
       </div>
-
-      <div>
-        <SectionTitle>Source</SectionTitle>
-        <div className="bg-gray-800 rounded-md px-2 divide-y divide-gray-700/50">
-          <Row label="Native W" value={obj.width} />
-          <Row label="Native H" value={obj.height} />
-        </div>
-      </div>
     </div>
   );
 }
@@ -319,14 +538,14 @@ export function PropertiesPanel() {
   const textObjects       = useEditorStore((s) => s.textObjects);
   const updateTextObject  = useEditorStore((s) => s.updateTextObject);
 
-  const selectedText  = selectedObjectId ? textObjects[selectedObjectId] : undefined;
+  const selectedText  = selectedObjectId ? textObjects[selectedObjectId]  : undefined;
   const selectedMedia = canvasObjects.find((o) => o.id === selectedObjectId);
 
   return (
     <div className="flex flex-col h-full bg-gray-900 border-l border-gray-700">
       <div className="px-3 py-2.5 border-b border-gray-700 flex-shrink-0">
         <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-          {selectedText ? 'Text' : selectedMedia ? 'Inspector' : 'Inspector'}
+          Inspector
         </h2>
       </div>
 
@@ -336,6 +555,8 @@ export function PropertiesPanel() {
             obj={selectedText}
             onUpdate={(u) => updateTextObject(selectedText.id, u)}
           />
+        ) : selectedMedia?.type === 'VIDEO' ? (
+          <VideoOverlayProperties mediaId={selectedMedia.id} />
         ) : selectedMedia ? (
           <MediaProperties obj={selectedMedia} />
         ) : (

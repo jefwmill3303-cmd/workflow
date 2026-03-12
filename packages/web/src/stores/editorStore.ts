@@ -31,6 +31,35 @@ export interface CanvasObjectDescriptor {
   scaleY: number;
 }
 
+// ── Video overlay types ───────────────────────────────────────────────────────
+
+export type OverlayAnimation =
+  | 'none' | 'fade'
+  | 'slide-left' | 'slide-right' | 'slide-top' | 'slide-bottom'
+  | 'scale-up';
+
+export interface VideoOverlay {
+  id: string;
+  chromaKey: {
+    enabled:      boolean;
+    color:        string;   // hex
+    similarity:   number;   // 0-1
+    smoothness:   number;   // 0-1
+    spillSuppress: number;  // 0-1
+  };
+  opacity: number;          // 0-1
+  border: {
+    enabled: boolean;
+    color:   string;
+    width:   number;
+    radius:  number;
+  };
+  dropShadow: boolean;
+  crop: { top: number; right: number; bottom: number; left: number };
+  entryAnimation: OverlayAnimation;
+  exitAnimation:  OverlayAnimation;
+}
+
 // ── Text types ────────────────────────────────────────────────────────────────
 
 export type TextAnimation = 'none' | 'fade-in' | 'slide-up' | 'pop' | 'typewriter';
@@ -91,6 +120,7 @@ interface EditorState {
   loadedMedia: MediaFile[];
   canvasObjects: CanvasObjectDescriptor[];
   textObjects: Record<string, TextObject>;
+  videoOverlays: Record<string, VideoOverlay>;
   playback: PlaybackState;
   selectedObjectId: string | null;
   mediaToLoad: MediaFile | null;
@@ -109,6 +139,9 @@ interface EditorState {
   removeCanvasObject: (id: string) => void;
   updateCanvasObject: (id: string, updates: Partial<CanvasObjectDescriptor>) => void;
   clearCanvasObjects: () => void;
+
+  setVideoOverlay: (id: string, overlay: VideoOverlay) => void;
+  updateVideoOverlay: (id: string, updates: Partial<VideoOverlay>) => void;
 
   addTextObject: (obj: TextObject) => void;
   updateTextObject: (id: string, updates: Partial<TextObject>) => void;
@@ -138,6 +171,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   loadedMedia: [],
   canvasObjects: [],
   textObjects: {},
+  videoOverlays: {},
   playback: { playing: false, currentTime: 0, duration: 0 },
   selectedObjectId: null,
   mediaToLoad: null,
@@ -148,6 +182,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   setProject: (p) => set({ project: p }),
   setLoadedMedia: (media) => set({ loadedMedia: media }),
+
+  setVideoOverlay: (id, overlay) =>
+    set((s) => ({ videoOverlays: { ...s.videoOverlays, [id]: overlay } })),
+  updateVideoOverlay: (id, updates) =>
+    set((s) => ({
+      videoOverlays: {
+        ...s.videoOverlays,
+        [id]: { ...s.videoOverlays[id], ...updates } as VideoOverlay,
+      },
+    })),
 
   addCanvasObject: (obj) => set((s) => ({ canvasObjects: [...s.canvasObjects, obj] })),
   removeCanvasObject: (id) =>
