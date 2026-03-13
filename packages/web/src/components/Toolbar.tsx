@@ -1,10 +1,13 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useEditorStore } from '../stores/editorStore.js';
+import { ExportPanel } from './ExportPanel.js';
 
 export function Toolbar() {
   const project    = useEditorStore((s) => s.project);
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
+  const [exportOpen, setExportOpen] = useState(false);
 
   return (
     <div className="h-12 bg-gray-800 border-b border-gray-700 flex items-center px-4 gap-3 flex-shrink-0">
@@ -86,9 +89,14 @@ export function Toolbar() {
       <div className="flex-1" />
 
       {/* Export */}
-      <button className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-md transition-colors">
+      <button
+        onClick={() => setExportOpen(true)}
+        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-md transition-colors"
+      >
         Export
       </button>
+
+      {exportOpen && <ExportPanel onClose={() => setExportOpen(false)} />}
     </div>
   );
 }

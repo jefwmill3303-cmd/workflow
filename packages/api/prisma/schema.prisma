@@ -16,6 +16,13 @@ enum MediaType {
   IMAGE
 }
 
+enum ExportStatus {
+  queued
+  processing
+  complete
+  failed
+}
+
 model Project {
   id            String      @id @default(uuid())
   name          String
@@ -24,6 +31,21 @@ model Project {
   created_at    DateTime    @default(now())
   updated_at    DateTime    @updatedAt
   media_files   MediaFile[]
+  exports       Export[]
+}
+
+model Export {
+  id         String       @id @default(uuid())
+  project_id String
+  project    Project      @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  platform   String
+  status     ExportStatus @default(queued)
+  progress   Int          @default(0)
+  settings   Json         @default("{}")
+  output_url String?
+  error      String?
+  created_at DateTime     @default(now())
+  updated_at DateTime     @updatedAt
 }
 
 model MediaFile {
