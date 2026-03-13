@@ -196,6 +196,7 @@ export function VideoCanvas() {
   const textObjects         = useEditorStore((s) => s.textObjects);
   const videoOverlays       = useEditorStore((s) => s.videoOverlays);
   const mixerTracks         = useEditorStore((s) => s.mixerTracks);
+  const deleteObjectId      = useEditorStore((s) => s.deleteObjectId);
   const clearMediaToLoad    = useEditorStore((s) => s.clearMediaToLoad);
   const addCanvasObject     = useEditorStore((s) => s.addCanvasObject);
   const setSelectedObjectId = useEditorStore((s) => s.setSelectedObjectId);
@@ -205,6 +206,26 @@ export function VideoCanvas() {
   const addMediaToTimeline  = useEditorStore((s) => s.addMediaToTimeline);
   const setVideoOverlay     = useEditorStore((s) => s.setVideoOverlay);
   const setWaveformData     = useEditorStore((s) => s.setWaveformData);
+  const clearDeleteObjectId = useEditorStore((s) => s.clearDeleteObjectId);
+
+  // ── Delete object on store signal ────────────────────────────────────────
+  useEffect(() => {
+    if (!deleteObjectId) return;
+    const fc = fabricRef.current;
+    if (fc) {
+      const entry = mediaMapRef.current.get(deleteObjectId);
+      if (entry) {
+        const fab = getFabObj(entry);
+        if (fab) fc.remove(fab);
+        if (entry.kind === 'video') { entry.videoEl.pause(); entry.videoEl.src = ''; entry.ckGL?.destroy(); }
+        if (entry.kind === 'audio') { entry.audioEl.pause(); entry.audioEl.src = ''; }
+        mediaMapRef.current.delete(deleteObjectId);
+        fc.discardActiveObject();
+        fc.requestRenderAll();
+      }
+    }
+    clearDeleteObjectId();
+  }, [deleteObjectId, clearDeleteObjectId]);
 
   // ── Google Fonts ──────────────────────────────────────────────────────────
   useEffect(() => {

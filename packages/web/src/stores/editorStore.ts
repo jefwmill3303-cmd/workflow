@@ -121,6 +121,37 @@ export interface TimelineTrack {
   clips: TimelineClip[];
 }
 
+// ── Undo snapshot ─────────────────────────────────────────────────────────────
+
+interface UndoSnapshot {
+  timelineTracks: TimelineTrack[];
+  canvasObjects: CanvasObjectDescriptor[];
+  textObjects: Record<string, TextObject>;
+  videoOverlays: Record<string, VideoOverlay>;
+  mixerTracks: Record<string, MixerTrack>;
+  clipFades: Record<string, ClipFade>;
+}
+
+const MAX_UNDO = 50;
+
+function takeSnapshot(s: {
+  timelineTracks: TimelineTrack[];
+  canvasObjects: CanvasObjectDescriptor[];
+  textObjects: Record<string, TextObject>;
+  videoOverlays: Record<string, VideoOverlay>;
+  mixerTracks: Record<string, MixerTrack>;
+  clipFades: Record<string, ClipFade>;
+}): UndoSnapshot {
+  return {
+    timelineTracks: s.timelineTracks,
+    canvasObjects: s.canvasObjects,
+    textObjects: s.textObjects,
+    videoOverlays: s.videoOverlays,
+    mixerTracks: s.mixerTracks,
+    clipFades: s.clipFades,
+  };
+}
+
 // ── State interface ───────────────────────────────────────────────────────────
 
 interface PlaybackState {
@@ -147,6 +178,18 @@ interface EditorState {
   timelineZoom: number;
   activeTool: 'select' | 'split' | 'text';
   activeClipId: string | null;
+
+  // Undo/Redo
+  undoStack: UndoSnapshot[];
+  redoStack: UndoSnapshot[];
+
+  // Autosave
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error';
+  lastSavedAt: number | null;
+  isDirty: boolean;
+
+  // Canvas delete signal
+  deleteObjectId: string | null;
 
   // ── Actions ──
   setProject: (p: Project | null) => void;
@@ -185,6 +228,21 @@ interface EditorState {
   setTimelineZoom: (zoom: number) => void;
   setActiveTool: (tool: 'select' | 'split' | 'text') => void;
   setActiveClipId: (id: string | null) => void;
+
+  // Undo/Redo
+  pushUndo: () => void;
+  undo: () => void;
+  redo: () => void;
+
+  // Autosave
+  setSaveStatus: (s: 'idle' | 'saving' | 'saved' | 'error') => void;
+  setLastSavedAt: (t: number) => void;
+  markDirty: () => void;
+  updateProjectName: (name: string) => void;
+
+  // Delete
+  deleteSelected: () => void;
+  clearDeleteObjectId: () => void;
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -205,6 +263,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   timelineZoom: 80,
   activeTool: 'select',
   activeClipId: null,
+  undoStack: [],
+  redoStack: [],
+  saveStatus: 'idle',
+  lastSavedAt: null,
+  isDirty: false,
+  deleteObjectId: null,
 
   setProject: (p) => set({ project: p }),
   setLoadedMedia: (media) => set({ loadedMedia: media }),
@@ -275,6 +339,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const newTrackCount = prev.timelineTracks.filter((t) => t.type === 'text').length;
 
       return {
+        undoStack: [...prev.undoStack.slice(-MAX_UNDO + 1), takeSnapshot(prev)],
+        redoStack: [],
+        isDirty: true,
         textObjects: { ...prev.textObjects, [obj.id]: obj },
         clipFades: { ...prev.clipFades, [clipId]: { clipId, fadeIn: 0, fadeOut: 0 } },
         timelineTracks: existingTrack
@@ -308,8 +375,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   removeTextObject: (id) =>
     set((prev) => {
+      const snapshot = takeSnapshot(prev);
       const { [id]: _removed, ...rest } = prev.textObjects;
-      return { textObjects: rest };
+      // Find the clip referencing this text object as mediaFileId
+      let foundClipId: string | null = null;
+      let foundTrackId: string | null = null;
+      for (const track of prev.timelineTracks) {
+        const clip = track.clips.find((c) => c.mediaFileId === id);
+        if (clip) { foundClipId = clip.id; foundTrackId = track.id; break; }
+      }
+      const newTracks = foundTrackId && foundClipId
+        ? prev.timelineTracks.map((t) =>
+            t.id !== foundTrackId ? t :
+            { ...t, clips: t.clips.filter((c) => c.id !== foundClipId) },
+          )
+        : prev.timelineTracks;
+      const newFades = foundClipId
+        ? Object.fromEntries(Object.entries(prev.clipFades).filter(([k]) => k !== foundClipId))
+        : prev.clipFades;
+      return {
+        textObjects: rest,
+        timelineTracks: newTracks,
+        clipFades: newFades,
+        undoStack: [...prev.undoStack.slice(-MAX_UNDO + 1), snapshot],
+        redoStack: [],
+        isDirty: true,
+      };
     }),
 
   setPlaying: (v) => set((s) => ({ playback: { ...s.playback, playing: v } })),
@@ -323,6 +414,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   addMediaToTimeline: (file, sourceDuration) => {
     const s = get();
+    const undoSnap = takeSnapshot(s);
     const trackType: TimelineTrack['type'] = file.type === 'AUDIO' ? 'audio' : 'video';
 
     const existingTrack = s.timelineTracks.find((t) => t.type === trackType);
@@ -347,6 +439,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     };
 
     set((prev) => ({
+      undoStack: [...prev.undoStack.slice(-MAX_UNDO + 1), undoSnap],
+      redoStack: [],
+      isDirty: true,
       timelineTracks: existingTrack
         ? prev.timelineTracks.map((t) =>
             t.id === trackId ? { ...t, clips: [...t.clips, clip] } : t,
@@ -393,23 +488,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   removeClip: (trackId, clipId) => {
-    set((s) => ({
-      timelineTracks: s.timelineTracks.map((track) =>
-        track.id !== trackId
-          ? track
-          : { ...track, clips: track.clips.filter((c) => c.id !== clipId) },
-      ),
-    }));
+    set((prev) => {
+      const snapshot = takeSnapshot(prev);
+      const { [clipId]: _removed, ...restFades } = prev.clipFades;
+      return {
+        timelineTracks: prev.timelineTracks.map((track) =>
+          track.id !== trackId
+            ? track
+            : { ...track, clips: track.clips.filter((c) => c.id !== clipId) },
+        ),
+        clipFades: restFades,
+        undoStack: [...prev.undoStack.slice(-MAX_UNDO + 1), snapshot],
+        redoStack: [],
+        isDirty: true,
+      };
+    });
   },
 
   splitClip: (trackId, clipId, atTime) => {
-    const track = get().timelineTracks.find((t) => t.id === trackId);
+    const s = get();
+    const track = s.timelineTracks.find((t) => t.id === trackId);
     const clip = track?.clips.find((c) => c.id === clipId);
     if (!clip) return;
 
     const clipEnd = clip.startTime + (clip.outPoint - clip.inPoint);
     if (atTime <= clip.startTime || atTime >= clipEnd) return;
 
+    const snapshot = takeSnapshot(s);
     const splitSourceTime = clip.inPoint + (atTime - clip.startTime);
     const clipA: TimelineClip = { ...clip, outPoint: splitSourceTime };
     const clipB: TimelineClip = {
@@ -419,22 +524,144 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       inPoint: splitSourceTime,
     };
 
-    const origFade = get().clipFades[clipId] ?? { clipId, fadeIn: 0, fadeOut: 0 };
-    set((s) => ({
-      timelineTracks: s.timelineTracks.map((t) =>
+    const origFade = s.clipFades[clipId] ?? { clipId, fadeIn: 0, fadeOut: 0 };
+    set((prev) => ({
+      timelineTracks: prev.timelineTracks.map((t) =>
         t.id !== trackId
           ? t
           : { ...t, clips: t.clips.flatMap((c) => (c.id === clipId ? [clipA, clipB] : [c])) },
       ),
       clipFades: {
-        ...s.clipFades,
+        ...prev.clipFades,
         [clipId]:  { ...origFade, clipId,   fadeOut: 0 },
         [clipB.id]: { clipId: clipB.id, fadeIn: 0, fadeOut: origFade.fadeOut },
       },
+      undoStack: [...prev.undoStack.slice(-MAX_UNDO + 1), snapshot],
+      redoStack: [],
+      isDirty: true,
     }));
   },
 
   setTimelineZoom: (zoom) => set({ timelineZoom: zoom }),
   setActiveTool: (tool) => set({ activeTool: tool }),
   setActiveClipId: (id) => set({ activeClipId: id }),
+
+  pushUndo: () => {
+    const s = get();
+    const snapshot = takeSnapshot(s);
+    set((prev) => ({
+      undoStack: [...prev.undoStack.slice(-MAX_UNDO + 1), snapshot],
+      redoStack: [],
+    }));
+  },
+
+  undo: () => {
+    const s = get();
+    if (s.undoStack.length === 0) return;
+    const snapshot = s.undoStack[s.undoStack.length - 1];
+    const current = takeSnapshot(s);
+    set({
+      ...snapshot,
+      undoStack: s.undoStack.slice(0, -1),
+      redoStack: [...s.redoStack, current],
+      isDirty: true,
+    });
+  },
+
+  redo: () => {
+    const s = get();
+    if (s.redoStack.length === 0) return;
+    const snapshot = s.redoStack[s.redoStack.length - 1];
+    const current = takeSnapshot(s);
+    set({
+      ...snapshot,
+      redoStack: s.redoStack.slice(0, -1),
+      undoStack: [...s.undoStack, current],
+      isDirty: true,
+    });
+  },
+
+  setSaveStatus: (s) => set({ saveStatus: s }),
+  setLastSavedAt: (t) => set({ lastSavedAt: t }),
+  markDirty: () => set({ isDirty: true }),
+  updateProjectName: (name) => set((s) => ({
+    project: s.project ? { ...s.project, name } : null,
+    isDirty: true,
+  })),
+
+  deleteSelected: () => {
+    const s = get();
+    if (s.selectedObjectId) {
+      const id = s.selectedObjectId;
+      const snapshot = takeSnapshot(s);
+      // Find clip referencing this mediaFileId
+      let foundTrackId: string | null = null;
+      let foundClipId: string | null = null;
+      for (const track of s.timelineTracks) {
+        const clip = track.clips.find((c) => c.mediaFileId === id);
+        if (clip) { foundTrackId = track.id; foundClipId = clip.id; break; }
+      }
+      set((prev) => {
+        const newTracks = foundTrackId && foundClipId
+          ? prev.timelineTracks.map((t) =>
+              t.id !== foundTrackId ? t :
+              { ...t, clips: t.clips.filter((c) => c.id !== foundClipId) },
+            )
+          : prev.timelineTracks;
+        const newFades = foundClipId
+          ? Object.fromEntries(Object.entries(prev.clipFades).filter(([k]) => k !== foundClipId))
+          : prev.clipFades;
+        if (prev.textObjects[id]) {
+          const { [id]: _removed, ...restText } = prev.textObjects;
+          return {
+            textObjects: restText,
+            timelineTracks: newTracks,
+            clipFades: newFades,
+            selectedObjectId: null,
+            deleteObjectId: id,
+            undoStack: [...prev.undoStack.slice(-MAX_UNDO + 1), snapshot],
+            redoStack: [],
+            isDirty: true,
+          };
+        } else {
+          return {
+            canvasObjects: prev.canvasObjects.filter((o) => o.id !== id),
+            timelineTracks: newTracks,
+            clipFades: newFades,
+            selectedObjectId: null,
+            deleteObjectId: id,
+            undoStack: [...prev.undoStack.slice(-MAX_UNDO + 1), snapshot],
+            redoStack: [],
+            isDirty: true,
+          };
+        }
+      });
+    } else if (s.activeClipId) {
+      const id = s.activeClipId;
+      const snapshot = takeSnapshot(s);
+      let foundTrackId: string | null = null;
+      for (const track of s.timelineTracks) {
+        if (track.clips.some((c) => c.id === id)) { foundTrackId = track.id; break; }
+      }
+      if (foundTrackId) {
+        const trackId = foundTrackId;
+        set((prev) => {
+          const { [id]: _removed, ...restFades } = prev.clipFades;
+          return {
+            timelineTracks: prev.timelineTracks.map((t) =>
+              t.id !== trackId ? t :
+              { ...t, clips: t.clips.filter((c) => c.id !== id) },
+            ),
+            clipFades: restFades,
+            activeClipId: null,
+            undoStack: [...prev.undoStack.slice(-MAX_UNDO + 1), snapshot],
+            redoStack: [],
+            isDirty: true,
+          };
+        });
+      }
+    }
+  },
+
+  clearDeleteObjectId: () => set({ deleteObjectId: null }),
 }));
