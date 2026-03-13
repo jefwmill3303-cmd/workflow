@@ -31,6 +31,20 @@ export interface CanvasObjectDescriptor {
   scaleY: number;
 }
 
+// ── Audio mixer types ─────────────────────────────────────────────────────────
+
+export interface MixerTrack {
+  trackId: string;
+  volume:  number;  // 0-2 (0-200%)
+  muted:   boolean;
+}
+
+export interface ClipFade {
+  clipId:  string;
+  fadeIn:  number; // seconds
+  fadeOut: number; // seconds
+}
+
 // ── Video overlay types ───────────────────────────────────────────────────────
 
 export type OverlayAnimation =
@@ -121,6 +135,9 @@ interface EditorState {
   canvasObjects: CanvasObjectDescriptor[];
   textObjects: Record<string, TextObject>;
   videoOverlays: Record<string, VideoOverlay>;
+  mixerTracks: Record<string, MixerTrack>;
+  clipFades: Record<string, ClipFade>;
+  waveformData: Record<string, Float32Array>;
   playback: PlaybackState;
   selectedObjectId: string | null;
   mediaToLoad: MediaFile | null;
@@ -142,6 +159,12 @@ interface EditorState {
 
   setVideoOverlay: (id: string, overlay: VideoOverlay) => void;
   updateVideoOverlay: (id: string, updates: Partial<VideoOverlay>) => void;
+
+  setMixerTrack: (trackId: string, t: MixerTrack) => void;
+  updateMixerTrack: (trackId: string, updates: Partial<MixerTrack>) => void;
+  setClipFade: (clipId: string, fade: ClipFade) => void;
+  updateClipFade: (clipId: string, updates: Partial<ClipFade>) => void;
+  setWaveformData: (mediaFileId: string, data: Float32Array) => void;
 
   addTextObject: (obj: TextObject) => void;
   updateTextObject: (id: string, updates: Partial<TextObject>) => void;
@@ -172,6 +195,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   canvasObjects: [],
   textObjects: {},
   videoOverlays: {},
+  mixerTracks: {},
+  clipFades: {},
+  waveformData: {},
   playback: { playing: false, currentTime: 0, duration: 0 },
   selectedObjectId: null,
   mediaToLoad: null,
@@ -182,6 +208,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   setProject: (p) => set({ project: p }),
   setLoadedMedia: (media) => set({ loadedMedia: media }),
+
+  setMixerTrack: (trackId, t) =>
+    set((s) => ({ mixerTracks: { ...s.mixerTracks, [trackId]: t } })),
+  updateMixerTrack: (trackId, updates) =>
+    set((s) => ({
+      mixerTracks: {
+        ...s.mixerTracks,
+        [trackId]: { ...s.mixerTracks[trackId], ...updates } as MixerTrack,
+      },
+    })),
+  setClipFade: (clipId, fade) =>
+    set((s) => ({ clipFades: { ...s.clipFades, [clipId]: fade } })),
+  updateClipFade: (clipId, updates) =>
+    set((s) => ({
+      clipFades: {
+        ...s.clipFades,
+        [clipId]: { ...s.clipFades[clipId], ...updates } as ClipFade,
+      },
+    })),
+  setWaveformData: (mediaFileId, data) =>
+    set((s) => ({ waveformData: { ...s.waveformData, [mediaFileId]: data } })),
 
   setVideoOverlay: (id, overlay) =>
     set((s) => ({ videoOverlays: { ...s.videoOverlays, [id]: overlay } })),
@@ -229,6 +276,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       return {
         textObjects: { ...prev.textObjects, [obj.id]: obj },
+        clipFades: { ...prev.clipFades, [clipId]: { clipId, fadeIn: 0, fadeOut: 0 } },
         timelineTracks: existingTrack
           ? prev.timelineTracks.map((t) =>
               t.id === trackId ? { ...t, clips: [...t.clips, clip] } : t,
@@ -320,6 +368,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...prev.playback,
         duration: Math.max(prev.playback.duration, startTime + sourceDuration),
       },
+      mixerTracks: {
+        ...prev.mixerTracks,
+        [trackId]: prev.mixerTracks[trackId] ?? { trackId, volume: 1, muted: false },
+      },
+      clipFades: {
+        ...prev.clipFades,
+        [clipId]: { clipId, fadeIn: 0, fadeOut: 0 },
+      },
     }));
   },
 
@@ -363,12 +419,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       inPoint: splitSourceTime,
     };
 
+    const origFade = get().clipFades[clipId] ?? { clipId, fadeIn: 0, fadeOut: 0 };
     set((s) => ({
       timelineTracks: s.timelineTracks.map((t) =>
         t.id !== trackId
           ? t
           : { ...t, clips: t.clips.flatMap((c) => (c.id === clipId ? [clipA, clipB] : [c])) },
       ),
+      clipFades: {
+        ...s.clipFades,
+        [clipId]:  { ...origFade, clipId,   fadeOut: 0 },
+        [clipB.id]: { clipId: clipB.id, fadeIn: 0, fadeOut: origFade.fadeOut },
+      },
     }));
   },
 

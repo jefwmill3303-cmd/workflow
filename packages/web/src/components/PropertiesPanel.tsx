@@ -4,6 +4,7 @@ import {
   type TextAnimation,
   type VideoOverlay,
   type OverlayAnimation,
+  type ClipFade,
 } from '../stores/editorStore.js';
 
 // ── Font list ─────────────────────────────────────────────────────────────────
@@ -497,6 +498,70 @@ function VideoOverlayProperties({
   );
 }
 
+// ── Clip fade controls (shown for any selected clip) ──────────────────────────
+function ClipFadeSection({ clipId }: { clipId: string }) {
+  const tracks         = useEditorStore((s) => s.timelineTracks);
+  const fade           = useEditorStore((s) => s.clipFades[clipId]);
+  const updateClipFade = useEditorStore((s) => s.updateClipFade);
+
+  // Find clip duration so we can cap the sliders
+  let clipDur = 60;
+  for (const track of tracks) {
+    const clip = track.clips.find((c) => c.id === clipId);
+    if (clip) { clipDur = clip.outPoint - clip.inPoint; break; }
+  }
+
+  if (!fade) return null;
+
+  const upd = (u: Partial<ClipFade>) => updateClipFade(clipId, u);
+
+  return (
+    <div>
+      <SectionTitle>Clip Fades</SectionTitle>
+      <div className="space-y-1">
+        <SliderRow
+          label="Fade In"
+          value={fade.fadeIn}
+          onChange={(v) => upd({ fadeIn: Math.round(v * 10) / 10 })}
+          min={0}
+          max={Math.max(1, clipDur)}
+          step={0.1}
+        />
+        <SliderRow
+          label="Fade Out"
+          value={fade.fadeOut}
+          onChange={(v) => upd({ fadeOut: Math.round(v * 10) / 10 })}
+          min={0}
+          max={Math.max(1, clipDur)}
+          step={0.1}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Audio clip properties (for audio-only clips with no canvas object) ─────────
+function AudioClipProperties({ clipId }: { clipId: string }) {
+  const tracks = useEditorStore((s) => s.timelineTracks);
+  let label = 'Audio Clip';
+  for (const track of tracks) {
+    const clip = track.clips.find((c) => c.id === clipId);
+    if (clip) { label = clip.label; break; }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-900/60 text-emerald-300">
+          AUDIO
+        </span>
+        <span className="text-xs text-gray-300 font-medium truncate" title={label}>{label}</span>
+      </div>
+      <ClipFadeSection clipId={clipId} />
+    </div>
+  );
+}
+
 // ── Non-video media properties (audio / image) ────────────────────────────────
 function MediaProperties({ obj }: { obj: ReturnType<typeof useEditorStore.getState>['canvasObjects'][number] }) {
   return (
@@ -533,13 +598,34 @@ function MediaProperties({ obj }: { obj: ReturnType<typeof useEditorStore.getSta
 
 // ── Main export ───────────────────────────────────────────────────────────────
 export function PropertiesPanel() {
-  const selectedObjectId  = useEditorStore((s) => s.selectedObjectId);
-  const canvasObjects     = useEditorStore((s) => s.canvasObjects);
-  const textObjects       = useEditorStore((s) => s.textObjects);
-  const updateTextObject  = useEditorStore((s) => s.updateTextObject);
+  const selectedObjectId = useEditorStore((s) => s.selectedObjectId);
+  const activeClipId     = useEditorStore((s) => s.activeClipId);
+  const canvasObjects    = useEditorStore((s) => s.canvasObjects);
+  const textObjects      = useEditorStore((s) => s.textObjects);
+  const timelineTracks   = useEditorStore((s) => s.timelineTracks);
+  const updateTextObject = useEditorStore((s) => s.updateTextObject);
 
-  const selectedText  = selectedObjectId ? textObjects[selectedObjectId]  : undefined;
+  const selectedText  = selectedObjectId ? textObjects[selectedObjectId] : undefined;
   const selectedMedia = canvasObjects.find((o) => o.id === selectedObjectId);
+
+  // Find the timeline clip for the selected canvas object (for fades)
+  const clipIdForSelected = (() => {
+    if (!selectedObjectId) return null;
+    for (const track of timelineTracks) {
+      const clip = track.clips.find((c) => c.mediaFileId === selectedObjectId);
+      if (clip) return clip.id;
+    }
+    return null;
+  })();
+
+  // Is activeClipId for an audio-only clip (no canvas object)?
+  const isAudioOnlyClip = activeClipId && !selectedObjectId && (() => {
+    for (const track of timelineTracks) {
+      if (track.type !== 'audio') continue;
+      if (track.clips.some((c) => c.id === activeClipId)) return true;
+    }
+    return false;
+  })();
 
   return (
     <div className="flex flex-col h-full bg-gray-900 border-l border-gray-700">
@@ -556,15 +642,31 @@ export function PropertiesPanel() {
             onUpdate={(u) => updateTextObject(selectedText.id, u)}
           />
         ) : selectedMedia?.type === 'VIDEO' ? (
-          <VideoOverlayProperties mediaId={selectedMedia.id} />
+          <div className="space-y-4">
+            <VideoOverlayProperties mediaId={selectedMedia.id} />
+            {clipIdForSelected && (
+              <div className="border-t border-gray-700 pt-4">
+                <ClipFadeSection clipId={clipIdForSelected} />
+              </div>
+            )}
+          </div>
         ) : selectedMedia ? (
-          <MediaProperties obj={selectedMedia} />
+          <div className="space-y-4">
+            <MediaProperties obj={selectedMedia} />
+            {clipIdForSelected && (
+              <div className="border-t border-gray-700 pt-4">
+                <ClipFadeSection clipId={clipIdForSelected} />
+              </div>
+            )}
+          </div>
+        ) : isAudioOnlyClip && activeClipId ? (
+          <AudioClipProperties clipId={activeClipId} />
         ) : (
           <div className="mt-12 text-center">
             <svg className="w-8 h-8 text-gray-700 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5" />
             </svg>
-            <p className="text-xs text-gray-600">Click an object to inspect</p>
+            <p className="text-xs text-gray-600">Click an object on canvas or a clip on the timeline to inspect</p>
           </div>
         )}
       </div>

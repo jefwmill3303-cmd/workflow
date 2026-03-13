@@ -5,6 +5,7 @@ import { MediaLibrary } from '../components/MediaLibrary.js';
 import { VideoCanvas } from '../components/VideoCanvas.js';
 import { PropertiesPanel } from '../components/PropertiesPanel.js';
 import { TimelinePanel } from '../components/TimelinePanel.js';
+import { AudioMixerPanel } from '../components/AudioMixerPanel.js';
 import { useEditorStore } from '../stores/editorStore.js';
 import type { MediaFile } from '../stores/editorStore.js';
 
@@ -29,9 +30,7 @@ export function EditorPage() {
   }, [projectId, setProject]);
 
   const handleFileClick = (file: MediaFile) => {
-    if (file.type === 'VIDEO' || file.type === 'IMAGE') {
-      requestLoadMedia(file);
-    }
+    requestLoadMedia(file); // VIDEO, AUDIO, and IMAGE all load via VideoCanvas
   };
 
   if (!projectId) {
@@ -72,6 +71,9 @@ export function EditorPage() {
           <PropertiesPanel />
         </aside>
       </div>
+
+      {/* ── Audio Mixer ───────────────────────────────────────────────────── */}
+      <AudioMixerPanel />
 
       {/* ── Bottom — Timeline ─────────────────────────────────────────────── */}
       <TimelinePanel />
